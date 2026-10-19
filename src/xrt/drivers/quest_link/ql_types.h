@@ -163,6 +163,7 @@ typedef struct ql_xrsp_host
     uint16_t increment;
     int pairing_state;
     int64_t start_ns;
+    int64_t last_init_ns;
 
     // Echo state
     int echo_idx;

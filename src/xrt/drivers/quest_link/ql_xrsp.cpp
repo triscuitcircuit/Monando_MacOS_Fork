@@ -196,6 +196,8 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
 
     QUEST_LINK_INFO("(Re)initializing Quest Link USB device...");
 
+    host->last_init_ns = os_monotonic_get_ns();
+
     os_mutex_lock(&host->usb_mutex);
 
     if (host->dev) {
@@ -1184,8 +1186,18 @@ static void xrsp_handle_pkt(struct ql_xrsp_host *host)
 
     if ((pkt->topic == TOPIC_POSE || pkt->topic == TOPIC_SKELETON || pkt->topic == TOPIC_LOGGING) && host->pairing_state != PAIRINGSTATE_PAIRED)
     {
-        xrsp_trigger_bye(host, NULL);
-        ql_xrsp_usb_init(host, true);
+        // A session handoff (dashboard <-> game) can leave a few stray
+        // telemetry packets from the just-ended session still in flight
+        // while the new session's handshake is getting underway -- that's
+        // normal, not a stuck connection. Only force a disruptive full USB
+        // reset (which itself causes a burst of transient pipe errors and
+        // forces the headset to show the pairing-acceptance prompt again)
+        // once we've genuinely been stuck unpaired for a while.
+        int64_t since_init_ns = os_monotonic_get_ns() - host->last_init_ns;
+        if (since_init_ns > 2000LL * U_TIME_1MS_IN_NS) {
+            xrsp_trigger_bye(host, NULL);
+            ql_xrsp_usb_init(host, true);
+        }
     }
 
     if (host->pairing_state == PAIRINGSTATE_PAIRED && xrsp_ts_ns(host) - host->echo_req_sent_ns > 1000000000) {

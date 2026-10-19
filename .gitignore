@@ -25,6 +25,9 @@ src/xrt/compositor/shaders/*.vert.h
 src/xrt/compositor/shaders/*.frag.h
 src/xrt/compositor/shaders/*.comp.h
 src/xrt/include/xrt/xrt_config_*.h
+# ...except xrt_config_os.h: static, hand-written OS auto-detection, not
+# CMake-generated -- the broad glob above wrongly swept it up once already.
+!src/xrt/include/xrt/xrt_config_os.h
 src/xrt/ipc/*_generated.*
 src/xrt/targets/cli/monado-cli
 src/xrt/targets/ctl/monado-ctl
