@@ -32,7 +32,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install build tools
-        run: brew install cmake ninja python glslang vulkan-headers vulkan-loader libusb capnp
+        run: brew install cmake ninja python glslang vulkan-headers vulkan-loader libusb capnp nlohmann-json
       - name: Fetch Eigen 3.4.0
         run: git clone --branch 3.4.0 --depth 1 https://gitlab.com/libeigen/eigen.git .deps/eigen
       - name: Configure and build openxr_monado
