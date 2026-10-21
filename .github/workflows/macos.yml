@@ -1,0 +1,73 @@
+name: macOS build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  monado:
+    name: Monado (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install build tools
+        run: brew install cmake ninja python glslang vulkan-headers vulkan-loader libusb capnp
+      - name: Fetch Eigen 3.4.0
+        run: git clone --branch 3.4.0 --depth 1 https://gitlab.com/libeigen/eigen.git .deps/eigen
+      - name: Configure and build openxr_monado
+        run: |
+          cmake -S . -B build-ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix)" \
+            -DEIGEN3_INCLUDE_DIR="$(pwd)/.deps/eigen" \
+            -DVulkan_INCLUDE_DIR="$(brew --prefix vulkan-headers)/include" \
+            -DVulkan_LIBRARY="$(brew --prefix vulkan-loader)/lib/libvulkan.dylib" \
+            -DXRT_ENABLE_GPL=OFF \
+            -DXRT_HAVE_X264=OFF \
+            -DXRT_BUILD_DRIVER_QUEST_LINK=ON \
+            -DXRT_BUILD_DRIVER_WIVRN=ON \
+            -DXRT_BUILD_DRIVER_SIMULATED=ON \
+            -DXRT_BUILD_DRIVER_TWRAP=ON \
+            -DXRT_BUILD_DRIVER_NS=OFF \
+            -DXRT_BUILD_DRIVER_PSVR=OFF \
+            -DXRT_BUILD_DRIVER_QWERTY=OFF \
+            -DXRT_BUILD_DRIVER_WMR=OFF \
+            -DXRT_BUILD_SAMPLES=OFF \
+            -DXRT_FEATURE_SERVICE=OFF \
+            -DXRT_FEATURE_OPENXR=ON \
+            -DXRT_HAVE_VT=ON \
+            -DXRT_HAVE_VULKAN=ON \
+            -DXRT_HAVE_TRACY=OFF \
+            -DBUILD_TESTING=OFF
+          cmake --build build-ci --parallel 3 --target openxr_monado
+      - name: Archive built runtime
+        run: |
+          mkdir -p dist
+          cp build-ci/src/xrt/targets/openxr/libopenxr_monado.dylib dist/
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libopenxr_monado-macos-${{ matrix.arch }}
+          path: dist/libopenxr_monado.dylib
+          if-no-files-found: error
+          retention-days: 14

@@ -1,5 +1,11 @@
 # Monado - XR Runtime (XRT)
 
+## macOS Quest Link fork
+
+This fork adds a macOS build of the `quest_link` and `wivrn` (VideoToolbox)
+drivers on top of upstream Monado. It was seeded from
+[shinyquagsire23/monado, branch `macos_ql_merge`](https://github.com/shinyquagsire23/monado/tree/macos_ql_merge). Everything below this section is upstream Monado's own README.
+
 <!--
 Copyright 2018-2021, Collabora, Ltd.
 
