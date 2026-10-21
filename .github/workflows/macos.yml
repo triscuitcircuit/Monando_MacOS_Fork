@@ -43,6 +43,8 @@ jobs:
             -DEIGEN3_INCLUDE_DIR="$(pwd)/.deps/eigen" \
             -DVulkan_INCLUDE_DIR="$(brew --prefix vulkan-headers)/include" \
             -DVulkan_LIBRARY="$(brew --prefix vulkan-loader)/lib/libvulkan.dylib" \
+            -DXRT_HAVE_XCB=OFF \
+            -DXRT_HAVE_XLIB=OFF \
             -DXRT_ENABLE_GPL=OFF \
             -DXRT_HAVE_X264=OFF \
             -DXRT_BUILD_DRIVER_QUEST_LINK=ON \
