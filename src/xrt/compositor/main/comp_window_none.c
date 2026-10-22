@@ -90,7 +90,7 @@ create_image_views(struct comp_target_none *cts)
 
 	cts->base.image_count = 3;
 	VkImage *images = U_TYPED_ARRAY_CALLOC(VkImage, cts->base.image_count);
-	
+
 	for (int i = 0; i < cts->base.image_count; i++)
 	{
 		VkExtent2D extent = {.width = cts->base.width, .height = cts->base.height};
@@ -106,7 +106,7 @@ create_image_views(struct comp_target_none *cts)
 		image.samples = VK_SAMPLE_COUNT_1_BIT;
 		image.tiling = VK_IMAGE_TILING_OPTIMAL;
 		image.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-	
+
 		vk->vkCreateImage(vk->device, &image, NULL, &images[i]);
 #endif
 		VkDeviceMemory out_mem;
@@ -231,7 +231,7 @@ target_init_semaphores(struct comp_target_none *cts)
 		.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
 		.initialValue = 1000,
 	};
-	
+
 
 	VkSemaphoreCreateInfo info = {
 	    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
@@ -501,10 +501,7 @@ comp_target_none_cleanup(struct comp_target_none *cts)
 	}
 
 	if (cts->surface.handle != VK_NULL_HANDLE) {
-		vk->vkDestroySurfaceKHR( //
-		    vk->instance,        // instance
-		    cts->surface.handle, // surface
-		    NULL);               //
+		free((void *)cts->surface.handle);
 		cts->surface.handle = VK_NULL_HANDLE;
 	}
 
@@ -762,7 +759,7 @@ comp_window_none_init_swapchain(struct comp_target *ct, uint32_t width, uint32_t
 	}
 
 	// TODO HACK HACK HACK
-	//if (!d->display_properties.displayName) 
+	//if (!d->display_properties.displayName)
 	{
 		d->display_properties.displayName = "";
 	}
