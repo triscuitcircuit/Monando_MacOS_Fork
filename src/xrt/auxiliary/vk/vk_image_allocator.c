@@ -41,7 +41,7 @@ get_image_memory_handle_type(void)
 #elif defined(XRT_GRAPHICS_BUFFER_HANDLE_IS_FD)
 	return VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR;
 #elif defined(XRT_GRAPHICS_BUFFER_HANDLE_IS_XPC)
-	return VK_EXTERNAL_MEMORY_HANDLE_TYPE_FLAG_BITS_MAX_ENUM; //VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_KHR; // TODO
+	return VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT;
 #else
 #error "need port"
 #endif
@@ -122,12 +122,21 @@ create_image(struct vk_bundle *vk, const struct xrt_swapchain_create_info *info,
 
 	VkExternalMemoryHandleTypeFlags memory_handle_type = get_image_memory_handle_type();
 
+	// MoltenVK treats the mere presence of VkExternalMemoryImageCreateInfo in
+	// the pNext chain as "this image wants external memory", regardless of
+	// what handleTypes is set to -- chaining it with handleTypes=0 still gets
+	// rejected ("Only external memory handle type ...MTLTEXTURE_BIT_KHR is
+	// supported"), even though the Vulkan spec treats 0 as a no-op. On this
+	// platform nothing ever uses a real exported handle (see
+	// get_image_memory_handle_type()), so just don't chain the struct at all.
 	VkExternalMemoryImageCreateInfoKHR external_memory_image_create_info = {
 	    .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO_KHR,
 	    .handleTypes = memory_handle_type,
 	    .pNext = next_chain,
 	};
-	CHAIN(external_memory_image_create_info);
+	if (memory_handle_type != 0) {
+		CHAIN(external_memory_image_create_info);
+	}
 
 #if defined(XRT_GRAPHICS_BUFFER_HANDLE_IS_AHARDWAREBUFFER)
 	VkExternalFormatANDROID format_android = {
@@ -251,11 +260,18 @@ create_image(struct vk_bundle *vk, const struct xrt_swapchain_create_info *info,
 	    .handleTypes = memory_handle_type,
 	};
 
+	// Same reasoning as the image-create chain above: MoltenVK rejects
+	// VkExportMemoryAllocateInfo's mere presence unless handleTypes names a
+	// real type it supports, so skip chaining it at all when there isn't one.
+	void *pNext_for_allocate = memory_handle_type != 0
+	                                ? (void *)&export_alloc_info
+	                                : (use_dedicated_allocation ? (void *)&dedicated_memory_info : NULL);
+
 	ret = vk_alloc_and_bind_image_memory(   //
 	    vk,                                 // vk_bundle
 	    image,                              // image
 	    SIZE_MAX,                           // max_size
-	    &export_alloc_info,                 // pNext_for_allocate
+	    pNext_for_allocate,                 // pNext_for_allocate
 	    "vk_image_allocator::create_image", // caller_name
 	    &device_memory,                     // out_mem
 	    &size);                             // out_size

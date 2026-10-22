@@ -29,7 +29,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 // layer 0 left color, layer 0 right color, [optional: layer 0 left depth, layer 0 right depth], layer 1 left, layer 1 right, ...
 layout(set = 0, binding = 0) uniform sampler2D source[SAMPLER_ARRAY_SIZE];
 layout(set = 0, binding = 2) uniform writeonly restrict image2D target;
-layout(set = 0, binding = 3, std140) uniform restrict Config
+layout(set = 0, binding = 3, std140) uniform Config
 {
 	ivec4 views[2];
 	vec4 pre_transform[2];
