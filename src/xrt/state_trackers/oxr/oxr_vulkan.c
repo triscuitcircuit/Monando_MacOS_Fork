@@ -24,6 +24,17 @@
 #include "oxr_logger.h"
 #include "oxr_two_call.h"
 
+#if defined(XRT_OS_APPLE)
+#include <stdlib.h>
+__attribute__((constructor)) static void
+oxr_apple_moltenvk_defaults(void)
+{
+
+	setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 0);
+	setenv("MVK_CONFIG_USE_MTLHEAP", "0", 0);
+}
+#endif
+
 
 /*
  *
@@ -206,6 +217,11 @@ oxr_vk_create_vulkan_instance(struct oxr_logger *log,
 	VkInstanceCreateInfo modified_info = *createInfo->vulkanCreateInfo;
 	modified_info.ppEnabledExtensionNames = u_string_list_get_data(instance_ext_list);
 	modified_info.enabledExtensionCount = u_string_list_get_size(instance_ext_list);
+
+#if defined(XRT_OS_APPLE)
+	setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 0);
+	setenv("MVK_CONFIG_USE_MTLHEAP", "0", 0);
+#endif
 
 	*vulkanResult = CreateInstance(&modified_info, createInfo->vulkanAllocator, vulkanInstance);
 	if (*vulkanResult == VK_SUCCESS) {

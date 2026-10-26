@@ -226,6 +226,11 @@ create_instance(struct vk_bundle *vk, const struct comp_vulkan_arguments *vk_arg
 	    .ppEnabledExtensionNames = u_string_list_get_data(instance_ext_list),
 	};
 
+#if defined(XRT_OS_APPLE)
+	setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 0);
+	setenv("MVK_CONFIG_USE_MTLHEAP", "0", 0);
+#endif
+
 	ret = vk->vkCreateInstance(&instance_info, NULL, &vk->instance);
 	if (ret != VK_SUCCESS) {
 		VK_ERROR_RET(vk, "vkCreateInstance", "Failed to create Vulkan instance", ret);

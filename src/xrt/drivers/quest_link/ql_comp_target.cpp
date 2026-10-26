@@ -27,6 +27,7 @@
 #include "xrt_cast.h"
 #include <atomic>
 #include <condition_variable>
+#include <cstdlib>
 #include <list>
 #include <vector>
 #include <vulkan/vulkan_core.h>
@@ -70,10 +71,15 @@ struct ql_comp_target : public comp_target
 
 	int64_t last_avg_tx;
 	int64_t last_avg_enc;
+	int64_t last_raw_tx_ns;
+	int64_t last_raw_enc_ns;
 	int frames_since_encode_adjust;
 
 	// Monotonic counter, for video stream
 	uint64_t frame_index = 0;
+	std::atomic<uint64_t> encoded_frames{0};
+	std::atomic<uint64_t> out_of_order_prevented{0};
+	std::atomic<int64_t> encode_stage_ewma_ns{0};
 
 	struct pseudo_swapchain psc;
 
@@ -533,29 +539,27 @@ static void * comp_ql_present_thread(void * void_param)
 
 	uint8_t status_bit = 1 << (param->thread->index + 1);
 
-	std::vector<VkFence> fences(cn->image_count);
-	std::vector<int> indices(cn->image_count);
 	while (os_thread_helper_is_running(&param->thread->thread))
 	{
 		int presenting_index = -1;
-		int nb_fences = 0;
+		VkFence presenting_fence = VK_NULL_HANDLE;
 		{
 			std::unique_lock lock(cn->psc.mutex);
 
-			uint64_t timestamp = xrsp_ts_ns(cn->host);
-
+			uint64_t oldest_frame_index = UINT64_MAX;
+			int first_pending = -1;
 			for (uint32_t i = 0; i < cn->image_count; i++)
 			{
 				if (cn->psc.images[i].status & status_bit)
 				{
-					//printf("%llx %llx\n", timestamp, cn->psc.images[i].view_info.display_time);
-					//if (timestamp < cn->psc.images[i].view_info.display_time)
+					const uint64_t fi = cn->psc.images[i].frame_index;
+					if (first_pending < 0)
+						first_pending = (int)i;
+					if (presenting_index < 0 || fi < oldest_frame_index)
 					{
-						presenting_index = i;
+						presenting_index = (int)i;
+						oldest_frame_index = fi;
 					}
-					indices[nb_fences] = i;
-					fences[nb_fences++] = cn->psc.images[i].fence;
-					break;
 				}
 			}
 
@@ -567,9 +571,14 @@ static void * comp_ql_present_thread(void * void_param)
 				//std::this_thread::yield();
 				continue;
 			}
+
+			presenting_fence = cn->psc.images[presenting_index].fence;
+
+			if (cn->psc.images[first_pending].frame_index > oldest_frame_index)
+				cn->out_of_order_prevented.fetch_add(1, std::memory_order_relaxed);
 		}
 
-		VkResult res = vk->vkWaitForFences(vk->device, nb_fences, fences.data(), VK_TRUE, UINT64_MAX);
+		VkResult res = vk->vkWaitForFences(vk->device, 1, &presenting_fence, VK_TRUE, UINT64_MAX);
 		vk_check_error("vkWaitForFences", res, NULL);
 
 		if (++cn->frames_since_encode_adjust > 120)
@@ -588,10 +597,11 @@ static void * comp_ql_present_thread(void * void_param)
 			}
 			cn->frames_since_encode_adjust = 0;
 		}
-		
+
 
 		const auto & psc_image = cn->psc.images[presenting_index];
 
+		uint64_t enc_t0 = os_monotonic_get_ns();
 		try
 		{
 			for (auto & encoder: param->encoders)
@@ -606,12 +616,16 @@ static void * comp_ql_present_thread(void * void_param)
 		{
 			// Ignore errors
 		}
+		{
+			int64_t stage_ns = (int64_t)(os_monotonic_get_ns() - enc_t0);
+			int64_t prev = cn->encode_stage_ewma_ns.load(std::memory_order_relaxed);
+			cn->encode_stage_ewma_ns.store(prev ? (prev + stage_ns) / 2 : stage_ns, std::memory_order_relaxed);
+		}
+
+		cn->encoded_frames.fetch_add(1, std::memory_order_relaxed);
 
 		std::lock_guard lock(cn->psc.mutex);
-		for (int i = 0; i < nb_fences; i++)
-		{
-			cn->psc.images[indices[i]].status &= ~status_bit;
-		}
+		cn->psc.images[presenting_index].status &= ~status_bit;
 	}
 
 	return NULL;
@@ -722,39 +736,47 @@ static void comp_ql_calc_frame_pacing(struct comp_target * ct,
 	struct ql_comp_target* cn = (struct ql_comp_target *)ct;
 
 	//
-	// Weighted slightly heavier towards larger amounts, so if the user is rotating 
+	// Weighted slightly heavier towards larger amounts, so if the user is rotating
 	// their head a lot, we will err towards longer encodes/transmits
 	//
 
-	// For encoding, we take the longest start-end difference
-	int64_t avg_encode = cn->last_avg_enc;
+	// Collect per-slot samples once: longest slice encode, summed tx.
+	int64_t enc_samples[QL_SWAPCHAIN_DEPTH];
+	int64_t tx_samples[QL_SWAPCHAIN_DEPTH];
 	for (int i = 0; i < QL_SWAPCHAIN_DEPTH; i++)
 	{
 		int64_t largest_enc_diff = 0;
-		for (int j = 0; j < QL_NUM_SLICES; j++)
-		{
-			int64_t enc_diff = cn->host->encode_duration_ns[QL_IDX_SLICE(j,i)];//cn->host->encode_done_ns[i] - cn->host->encode_started_ns[i];
-			if (enc_diff > largest_enc_diff) {
-				largest_enc_diff = enc_diff;
-			}
-		}
-		avg_encode += largest_enc_diff;
-		avg_encode /= 2;
-	}
-
-	// For transmission, we sum all of the transmission times across slices
-	int64_t avg_tx = cn->last_avg_tx;
-	for (int i = 0; i < QL_SWAPCHAIN_DEPTH; i++)
-	{
 		int64_t full_tx_time = 0;
 		for (int j = 0; j < QL_NUM_SLICES; j++)
 		{
-			int64_t tx_diff = cn->host->tx_duration_ns[QL_IDX_SLICE(j,i)];
-			full_tx_time += tx_diff;
+			int64_t enc_diff = cn->host->encode_duration_ns[QL_IDX_SLICE(j,i)];
+			if (enc_diff > largest_enc_diff) {
+				largest_enc_diff = enc_diff;
+			}
+			full_tx_time += cn->host->tx_duration_ns[QL_IDX_SLICE(j,i)];
 		}
-		avg_tx += full_tx_time;
-		avg_tx /= 2;
+		enc_samples[i] = largest_enc_diff;
+		tx_samples[i] = full_tx_time;
 	}
+
+	int64_t avg_encode = cn->last_avg_enc;
+	int64_t avg_tx = cn->last_avg_tx;
+	int64_t raw_enc = cn->last_raw_enc_ns;
+	int64_t raw_tx = cn->last_raw_tx_ns;
+	for (int i = 0; i < QL_SWAPCHAIN_DEPTH; i++)
+	{
+		avg_encode = (avg_encode + enc_samples[i]) / 2;
+		avg_tx = (avg_tx + tx_samples[i]) / 2;
+		raw_enc = (raw_enc + enc_samples[i]) / 2;
+		raw_tx = (raw_tx + tx_samples[i]) / 2;
+	}
+	cn->last_raw_enc_ns = raw_enc;
+	cn->last_raw_tx_ns = raw_tx;
+
+	int64_t enc_stage_ns = cn->encode_stage_ewma_ns.load(std::memory_order_relaxed);
+	if (enc_stage_ns <= 0)
+		enc_stage_ns = raw_enc;
+	const int64_t present_offset_ns = 12 * (int64_t)U_TIME_1MS_IN_NS;
 
 	// If tx or enc takes longer than 10ms, weight lower so that
 	// it hopefully recovers to a normal value quicker?
@@ -763,11 +785,19 @@ static void comp_ql_calc_frame_pacing(struct comp_target * ct,
 
 	cn->last_avg_tx = avg_tx;
 	cn->last_avg_enc = avg_encode;
-	
+
 	//static int64_t add_test = 0;
 	static int limit_info_spam = 0;
 	if (++limit_info_spam > 100) {
-		QUEST_LINK_INFO("Avg: tx %fms, encode %fms, add %fms", (double)avg_tx / 1000000.0, (double)avg_encode / 1000000.0, (double)cn->host->add_test / 1000000.0);
+		QUEST_LINK_INFO("Avg: tx %fms, encode %fms, add %fms (encoded=%llu ooo_prevented=%llu offset=%fms stage=%fms rawenc=%fms)",
+		                (double)avg_tx / 1000000.0,
+		                (double)avg_encode / 1000000.0,
+		                (double)cn->host->add_test / 1000000.0,
+		                (unsigned long long)cn->encoded_frames.load(std::memory_order_relaxed),
+		                (unsigned long long)cn->out_of_order_prevented.load(std::memory_order_relaxed),
+		                (double)present_offset_ns / 1000000.0,
+		                (double)enc_stage_ns / 1000000.0,
+		                (double)raw_enc / 1000000.0);
 		limit_info_spam = 0;
 
 		//add_test += (1 * U_TIME_HALF_MS_IN_NS);
@@ -784,8 +814,11 @@ static void comp_ql_calc_frame_pacing(struct comp_target * ct,
 
 	uint64_t predicted_display_period_ns = U_TIME_1S_IN_NS / (cn->fps);// + encode_display_delay;
 	uint64_t min_display_period_ns = predicted_display_period_ns;
-	
-	//u_pc_update_present_offset(cn->upc, frame_id, encode_display_delay);
+
+	static const bool offset_env_pinned = std::getenv("U_PACING_COMP_PRESENT_TO_DISPLAY_OFFSET_MS") != nullptr;
+	if (!offset_env_pinned) {
+		u_pc_update_present_offset(cn->upc, frame_id, (uint64_t)present_offset_ns);
+	}
 
 	u_pc_predict(cn->upc,                      //
 	             now_ns,                       //

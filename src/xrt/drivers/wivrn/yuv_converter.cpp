@@ -102,19 +102,25 @@ static void destroy_all(YuvConverter * ptr)
 	auto & vk = ptr->vk;
 	vk.vkDestroyDescriptorPool(vk.device, ptr->descriptor_pool, nullptr);
 	vk.vkDestroyDescriptorSetLayout(vk.device, ptr->descriptor_set_layout, nullptr);
-	for (auto & comp: {ptr->y, ptr->uv})
+	for (auto * plane: {&ptr->y_plane, &ptr->uv_plane})
 	{
-		vk.vkDestroyPipeline(vk.device, comp.pipeline, nullptr);
-		vk.vkDestroyFramebuffer(vk.device, comp.frame_buffer, nullptr);
-		vk.vkDestroyRenderPass(vk.device, comp.render_pass, nullptr);
-		vk.vkDestroyShaderModule(vk.device, comp.frag, nullptr);
-
-		vk.vkUnmapMemory(vk.device, comp.buffer_memory);
-		vk.vkDestroyBuffer(vk.device, comp.buffer, nullptr);
-		vk.vkFreeMemory(vk.device, comp.buffer_memory, nullptr);
-		vk.vkDestroyImageView(vk.device, comp.view, nullptr);
-		vk.vkDestroyImage(vk.device, comp.image, nullptr);
-		vk.vkFreeMemory(vk.device, comp.image_memory, nullptr);
+		vk.vkDestroyPipeline(vk.device, plane->pipeline, nullptr);
+		vk.vkDestroyRenderPass(vk.device, plane->render_pass, nullptr);
+		vk.vkDestroyShaderModule(vk.device, plane->frag, nullptr);
+	}
+	for (auto * slots: {&ptr->y_slots, &ptr->uv_slots})
+	{
+		for (auto & comp: *slots)
+		{
+			vk.vkDestroyFramebuffer(vk.device, comp.frame_buffer, nullptr);
+			if (comp.buffer_memory != VK_NULL_HANDLE)
+				vk.vkUnmapMemory(vk.device, comp.buffer_memory);
+			vk.vkDestroyBuffer(vk.device, comp.buffer, nullptr);
+			vk.vkFreeMemory(vk.device, comp.buffer_memory, nullptr);
+			vk.vkDestroyImageView(vk.device, comp.view, nullptr);
+			vk.vkDestroyImage(vk.device, comp.image, nullptr);
+			vk.vkFreeMemory(vk.device, comp.image_memory, nullptr);
+		}
 	}
 	vk.vkDestroyPipelineLayout(vk.device, ptr->pipeline_layout, nullptr);
 
@@ -133,17 +139,15 @@ YuvConverter::YuvConverter(vk_bundle * vk, VkExtent3D extent, int offset_x, int 
 {
 	std::unique_ptr<YuvConverter, decltype(&destroy_all)> deleter(this, destroy_all);
 
-	y.extent = {extent.width, extent.height};
-	uv.extent = {extent.width / 2, extent.height / 2};
+	y_plane.extent = {extent.width, extent.height};
+	uv_plane.extent = {extent.width / 2, extent.height / 2};
+	y_plane.stride = (int)extent.width * bytes_per_pixel(y_format);
+	uv_plane.stride = (int)(extent.width / 2) * bytes_per_pixel(uv_format);
 
 	assert(y_format != VK_FORMAT_UNDEFINED);
 	assert(uv_format != VK_FORMAT_UNDEFINED);
 
-	VkResult res = create_image(*vk, y.extent, y_format, y);
-	vk_check_throw("create_image (y)", res);
-
-	res = create_image(*vk, uv.extent, uv_format, uv);
-	vk_check_throw("create_image (uv)", res);
+	VkResult res;
 
 	VkDescriptorSetLayoutBinding samplerLayoutBinding{};
 	samplerLayoutBinding.binding = 0;
@@ -170,10 +174,10 @@ YuvConverter::YuvConverter(vk_bundle * vk, VkExtent3D extent, int offset_x, int 
 	res = shader_load(vk, shaders.at("yuv_converter.vert"), &vert);
 	vk_check_throw("shader_load", res);
 
-	res = shader_load(vk, shaders.at("yuv_converter.y.frag"), &y.frag);
+	res = shader_load(vk, shaders.at("yuv_converter.y.frag"), &y_plane.frag);
 	vk_check_throw("shader_load", res);
 	res =
-	        shader_load(vk, shaders.at("yuv_converter.uv.frag"), &uv.frag);
+	        shader_load(vk, shaders.at("yuv_converter.uv.frag"), &uv_plane.frag);
 	vk_check_throw("shader_load", res);
 
 	// TODO
@@ -192,7 +196,7 @@ YuvConverter::YuvConverter(vk_bundle * vk, VkExtent3D extent, int offset_x, int 
 	{
 		VkAttachmentDescription colorAttachment{};
 		VkAttachmentReference colorAttachmentRef{};
-		auto & comp = (i == 0) ? y : uv;
+		auto & comp = (i == 0) ? y_plane : uv_plane;
 		double scale = (i == 0) ? 1.0 : 0.5;
 		colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
 		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -221,18 +225,6 @@ YuvConverter::YuvConverter(vk_bundle * vk, VkExtent3D extent, int offset_x, int 
 
 		res = vk->vkCreateRenderPass(vk->device, &renderPassInfo, nullptr, &comp.render_pass);
 		vk_check_throw("vkCreateRenderPass", res);
-
-		VkFramebufferCreateInfo framebufferInfo{};
-		framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-		framebufferInfo.renderPass = comp.render_pass;
-		framebufferInfo.attachmentCount = 1;
-		framebufferInfo.pAttachments = &comp.view;
-		framebufferInfo.width = comp.extent.width;
-		framebufferInfo.height = comp.extent.height;
-		framebufferInfo.layers = 1;
-
-		res = vk->vkCreateFramebuffer(vk->device, &framebufferInfo, nullptr, &comp.frame_buffer);
-		vk_check_throw("vkCreateFramebuffer", res);
 
 		VkPipelineShaderStageCreateInfo shaderStages[2] = {};
 
@@ -335,6 +327,34 @@ void YuvConverter::SetImages(int num_images, VkImage * images, VkImageView * vie
 	// os_mutex_lock(&vk.cmd_pool_mutex);
 	assert(command_buffers.empty());
 	assert(descriptor_sets.empty());
+	assert(y_slots.empty() && uv_slots.empty());
+
+	y_slots.resize(num_images);
+	uv_slots.resize(num_images);
+	for (int i = 0; i < num_images; ++i)
+	{
+		struct { plane_shared * shared; image_bundle * slot; VkFormat format; } todo[2] = {
+		    {&y_plane, &y_slots[i], y_format},
+		    {&uv_plane, &uv_slots[i], uv_format},
+		};
+		for (auto & t : todo)
+		{
+			t.slot->extent = t.shared->extent;
+			VkResult r = create_image(vk, t.shared->extent, t.format, *t.slot);
+			vk_check_throw("create_image (slot)", r);
+
+			VkFramebufferCreateInfo framebufferInfo{};
+			framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+			framebufferInfo.renderPass = t.shared->render_pass;
+			framebufferInfo.attachmentCount = 1;
+			framebufferInfo.pAttachments = &t.slot->view;
+			framebufferInfo.width = t.shared->extent.width;
+			framebufferInfo.height = t.shared->extent.height;
+			framebufferInfo.layers = 1;
+			r = vk.vkCreateFramebuffer(vk.device, &framebufferInfo, nullptr, &t.slot->frame_buffer);
+			vk_check_throw("vkCreateFramebuffer", r);
+		}
+	}
 	descriptor_sets.resize(num_images);
 	VkDescriptorPoolSize poolSize{};
 	poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -380,21 +400,25 @@ void YuvConverter::SetImages(int num_images, VkImage * images, VkImageView * vie
 		res = vk_cmd_create_and_begin_cmd_buffer_locked(&vk, cmd_pool, 0, &cmdBuffer);
 		vk_check_throw("vk_cmd_create_and_begin_cmd_buffer_locked", res);
 
-		for (auto & comp: {y, uv})
+		struct { plane_shared * shared; image_bundle * slot; } planes[2] = {
+		    {&y_plane, &y_slots[i]},
+		    {&uv_plane, &uv_slots[i]},
+		};
+		for (auto & pu: planes)
 		{
 			VkRenderPassBeginInfo render_pass_info{};
 			render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-			render_pass_info.renderPass = comp.render_pass;
-			render_pass_info.framebuffer = comp.frame_buffer;
-			render_pass_info.renderArea.extent = comp.extent;
+			render_pass_info.renderPass = pu.shared->render_pass;
+			render_pass_info.framebuffer = pu.slot->frame_buffer;
+			render_pass_info.renderArea.extent = pu.shared->extent;
 
 			vk.vkCmdBeginRenderPass(cmdBuffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
-			vk.vkCmdBindPipeline(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, comp.pipeline);
+			vk.vkCmdBindPipeline(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pu.shared->pipeline);
 			vk.vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
 			vk.vkCmdDraw(cmdBuffer, 3, 1, (num_slices << 4) | (slice_idx << 8) | 0, 0);
 			vk.vkCmdEndRenderPass(cmdBuffer);
 
-			if (comp.buffer != VK_NULL_HANDLE)
+			if (pu.slot->buffer != VK_NULL_HANDLE)
 			{
 				VkBufferImageCopy copy{};
 				copy.bufferOffset = 0;
@@ -405,9 +429,9 @@ void YuvConverter::SetImages(int num_images, VkImage * images, VkImageView * vie
 				copy.imageSubresource.baseArrayLayer = 0;
 				copy.imageSubresource.layerCount = 1;
 				copy.imageOffset = {0, 0, 0};
-				copy.imageExtent = {comp.extent.width, comp.extent.height, 1};
+				copy.imageExtent = {pu.shared->extent.width, pu.shared->extent.height, 1};
 				// TODO synchronisation?
-				vk.vkCmdCopyImageToBuffer(cmdBuffer, comp.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, comp.buffer, 1, &copy);
+				vk.vkCmdCopyImageToBuffer(cmdBuffer, pu.slot->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, pu.slot->buffer, 1, &copy);
 			}
 		}
 

@@ -92,7 +92,7 @@ void ql_xrsp_topic_pkt_destroy(struct ql_xrsp_topic_pkt* pkt)
 
 void ql_xrsp_topic_pkt_dump(struct ql_xrsp_topic_pkt* pkt)
 {
-    uint8_t muted_topics[] = {TOPIC_AUI4A_ADV, TOPIC_HOSTINFO_ADV, TOPIC_POSE, TOPIC_HANDS, TOPIC_AUDIO, TOPIC_RUNTIME_IPC, TOPIC_LOGGING};
+    uint8_t muted_topics[] = {TOPIC_AUI4A_ADV, TOPIC_HOSTINFO_ADV, TOPIC_COMMAND, TOPIC_POSE, TOPIC_HANDS, TOPIC_SKELETON, TOPIC_BODY, TOPIC_AUDIO, TOPIC_RUNTIME_IPC, TOPIC_LOGGING};
 
     for (int i = 0; i < sizeof(muted_topics); i++)
     {

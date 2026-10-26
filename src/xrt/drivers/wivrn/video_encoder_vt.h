@@ -73,7 +73,7 @@ class VideoEncoderVT : public VideoEncoder
     void* doNoIdrDict;
 
     VTCompressionSessionRef compression_session;
-    CVPixelBufferRef pixelBuffer;
+    CVPixelBufferRef pixelBuffers[3] = {};
 
 	int next_mb;
 	std::list<pending_nal> pending_nals;
@@ -106,7 +106,7 @@ private:
         VTEncodeInfoFlags infoFlags,
         CMSampleBufferRef sampleBuffer);
 
-	static void CopyNals(VideoEncoderVT* ctx, 
+	static void CopyNals(VideoEncoderVT* ctx,
 					  char* avcc_buffer,
                       const size_t avcc_size,
                       size_t size_len,

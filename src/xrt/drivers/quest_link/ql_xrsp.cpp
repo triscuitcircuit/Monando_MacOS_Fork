@@ -522,6 +522,7 @@ void xrsp_send_to_topic_capnp_segments(struct ql_xrsp_host *host, uint8_t topic,
     }
 
     xrsp_send_to_topic(host, topic, (uint8_t*)preamble, sizeof(uint32_t) * (num_segments + 1));
+    free(preamble);
 
     for (int i = 0; i < num_segments; i++)
     {
@@ -1034,7 +1035,6 @@ static void xrsp_handle_invite(struct ql_xrsp_host *host, struct ql_xrsp_hostinf
 
         float scale = 0.75;
         if (host->usb_slow_cable) {
-            scale = 0.5;
             if (hmd->device_type == DEVICE_TYPE_QUEST_2) {
                 hmd->fps = 90;
             }

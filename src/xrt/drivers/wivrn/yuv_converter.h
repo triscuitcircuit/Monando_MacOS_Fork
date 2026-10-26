@@ -28,6 +28,9 @@
 class YuvConverter
 {
 public:
+	// Per-slot conversion targets: slot i renders/copies only into its own
+	// image and host buffer, so pixels for swapchain image i stay paired
+	// with that image's pose/timestamps in the encoder.
 	struct image_bundle
 	{
 		VkDeviceMemory image_memory = VK_NULL_HANDLE;
@@ -36,13 +39,19 @@ public:
 		VkDeviceMemory buffer_memory = VK_NULL_HANDLE;
 		VkBuffer buffer = VK_NULL_HANDLE;
 		void * mapped_memory = nullptr;
-		VkRenderPass render_pass = VK_NULL_HANDLE;
 		VkFramebuffer frame_buffer = VK_NULL_HANDLE;
-		VkShaderModule frag = VK_NULL_HANDLE;
-		VkPipeline pipeline = VK_NULL_HANDLE;
 		VkExtent2D extent;
 		VkExtent2D extent_clipped;
 		int stride;
+	};
+
+	struct plane_shared
+	{
+		VkShaderModule frag = VK_NULL_HANDLE;
+		VkRenderPass render_pass = VK_NULL_HANDLE;
+		VkPipeline pipeline = VK_NULL_HANDLE;
+		VkExtent2D extent;
+		int stride = 0;
 	};
 
 	struct yuv_ubo {
@@ -50,8 +59,15 @@ public:
 	};
 
 	vk_bundle & vk;
-	image_bundle y;
-	image_bundle uv;
+	plane_shared y_plane;
+	plane_shared uv_plane;
+	std::vector<image_bundle> y_slots;
+	std::vector<image_bundle> uv_slots;
+
+	void * y_mapped(int i) const { return y_slots.at(i).mapped_memory; }
+	void * uv_mapped(int i) const { return uv_slots.at(i).mapped_memory; }
+	int y_stride() const { return y_plane.stride; }
+	int uv_stride() const { return uv_plane.stride; }
 	VkSampler sampler = VK_NULL_HANDLE;
 	VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
 	VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;

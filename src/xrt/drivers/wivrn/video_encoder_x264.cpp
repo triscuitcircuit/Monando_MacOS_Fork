@@ -157,7 +157,7 @@ VideoEncoderX264::VideoEncoderX264(
 	param.vui.i_chroma_loc = 1;
 
 	param.analyse.i_chroma_qp_offset = -2;
-	
+
 
 	param.vui.i_sar_width = settings.width;
 	param.vui.i_sar_height = settings.height / num_slices;
@@ -186,10 +186,10 @@ VideoEncoderX264::VideoEncoderX264(
 	pic.img.i_csp = X264_CSP_NV12;
 	pic.img.i_plane = 2;
 
-	pic.img.i_stride[0] = converter->y.stride;
-	pic.img.plane[0] = (uint8_t *)converter->y.mapped_memory;
-	pic.img.i_stride[1] = converter->uv.stride;
-	pic.img.plane[1] = (uint8_t *)converter->uv.mapped_memory;
+	pic.img.i_stride[0] = converter->y_stride();
+	pic.img.plane[0] = nullptr; // set per-slot in Encode()
+	pic.img.i_stride[1] = converter->uv_stride();
+	pic.img.plane[1] = nullptr;
 }
 
 void VideoEncoderX264::SetImages(int width, int height, VkFormat format, int num_images, VkImage * images, VkImageView * views, VkDeviceMemory * memory)
@@ -208,6 +208,8 @@ void VideoEncoderX264::Encode(int index, bool idr, std::chrono::steady_clock::ti
 	x264_nal_t * nal;
 	pic_in.i_type = idr ? X264_TYPE_IDR : X264_TYPE_AUTO;
 	pic_in.i_pts = pts.time_since_epoch().count();
+	pic_in.img.plane[0] = (uint8_t *)converter->y_mapped(index);
+	pic_in.img.plane[1] = (uint8_t *)converter->uv_mapped(index);
 	next_mb = 0;
 	assert(pending_nals.empty());
 	current_index = index;
@@ -236,15 +238,15 @@ void VideoEncoderX264::ModifyBitrate(int amount)
 	else if (desired_bitrate > original_bitrate * 2) {
 		desired_bitrate = original_bitrate * 2;
 	}
-	
 
-	if (orig_desired_bitrate != desired_bitrate) 
+
+	if (orig_desired_bitrate != desired_bitrate)
 	{
 		//x264_param_apply_profile(&param, "baseline");
 		//param.rc.i_bitrate = desired_bitrate;
 		//param.rc.i_vbv_max_bitrate = param.rc.i_bitrate;
 		//x264_encoder_reconfig(enc, &param);
-		
+
 
 		uint32_t orig_w = param.i_width;
 		uint32_t orig_h = param.i_height;
@@ -275,7 +277,7 @@ void VideoEncoderX264::ModifyBitrate(int amount)
 		param.vui.i_chroma_loc = 1;
 
 		param.analyse.i_chroma_qp_offset = -2;
-		
+
 		param.vui.i_sar_width = orig_w;
 		param.vui.i_sar_height = orig_h;
 		param.rc.i_rc_method = X264_RC_ABR;
@@ -300,10 +302,10 @@ void VideoEncoderX264::ModifyBitrate(int amount)
 		pic.img.i_csp = X264_CSP_NV12;
 		pic.img.i_plane = 2;
 
-		pic.img.i_stride[0] = converter->y.stride;
-		pic.img.plane[0] = (uint8_t *)converter->y.mapped_memory;
-		pic.img.i_stride[1] = converter->uv.stride;
-		pic.img.plane[1] = (uint8_t *)converter->uv.mapped_memory;
+		pic.img.i_stride[0] = converter->y_stride();
+		pic.img.plane[0] = nullptr;
+		pic.img.i_stride[1] = converter->uv_stride();
+		pic.img.plane[1] = nullptr;
 
 		x264_encoder_parameters(enc, &param);
 		U_LOG_W("Bitrate changed to %zu kbits per second", (size_t)param.rc.i_bitrate);
