@@ -11,11 +11,17 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <iostream>
+#include <algorithm>
+#include <cmath>
+#include "os/os_time.h"
 
 #include "math/m_api.h"
 #include "math/m_vec3.h"
 
 #include "ql_xrsp_hands.h"
+#include "ql_hands.h"
+#include "ql_xrsp.h"
+#include "ql_system.h"
 #include "ql_xrsp_hostinfo.h"
 #include "ql_xrsp_types.h"
 #include "ql_types.h"
@@ -115,7 +121,6 @@ void ql_xrsp_handle_body(struct ql_xrsp_host* host, struct ql_xrsp_topic_pkt* pk
 
 void ql_xrsp_handle_skeleton(struct ql_xrsp_host* host, struct ql_xrsp_topic_pkt* pkt)
 {
-    static int skeleton_num = 0;
     //printf("Parse skeleton %x\n", pkt->payload_valid);
 
     //char tmp[256];
@@ -125,6 +130,9 @@ void ql_xrsp_handle_skeleton(struct ql_xrsp_host* host, struct ql_xrsp_topic_pkt
     //fclose(f);
 
     struct ql_hands* ctrl = host->sys->hands;
+    if (!ctrl || pkt->payload_valid < sizeof(skeleton_bin)) return;
+    os_mutex_lock(&host->pose_mutex);
+    const uint32_t skeleton_num = ctrl->skeleton_count;
     struct skeleton_bin* payload = (struct skeleton_bin*)pkt->payload;
 
     // HACK: We should check the header.
@@ -151,7 +159,31 @@ void ql_xrsp_handle_skeleton(struct ql_xrsp_host* host, struct ql_xrsp_topic_pkt
     }
 
 
-    skeleton_num++;
+    if (ctrl->skeleton_count < 2) ctrl->skeleton_count++;
+    os_mutex_unlock(&host->pose_mutex);
+}
+
+static int64_t hand_sample_host_ns(double sample, uint64_t received_ns)
+{
+    static bool valid = false, logged = false;
+    static int64_t offset = 0;
+    static uint64_t last_received = 0;
+    if (!std::isfinite(sample) || sample <= 0) return (int64_t)received_ns;
+    const int64_t sample_ns = (int64_t)(sample * 1e9);
+    const int64_t estimate = (int64_t)received_ns - sample_ns;
+    if (!valid || estimate < offset || estimate - offset > 1000000000LL) {
+        offset = estimate;
+        valid = true;
+    } else {
+        const int64_t creep = (int64_t)(received_ns - last_received) / 2000; // 0.5 ms per second
+        offset = std::min(estimate, offset + creep);
+    }
+    last_received = received_ns;
+    if (!logged) {
+        logged = true;
+        QUEST_LINK_INFO("HANDS sample clock: %.6f s; offset to host learned from arrivals", sample);
+    }
+    return sample_ns + offset;
 }
 
 void dump_hand(struct hands_bin* hand)
@@ -163,6 +195,7 @@ void dump_hand(struct hands_bin* hand)
 
 void ql_xrsp_handle_hands(struct ql_xrsp_host* host, struct ql_xrsp_topic_pkt* pkt)
 {
+    if (!host->sys->hands || pkt->payload_valid < sizeof(hands_header) + 2 * sizeof(hands_bin)) return;
     os_mutex_lock(&host->pose_mutex);
 
     struct ql_hands* ctrl = host->sys->hands;
@@ -170,6 +203,19 @@ void ql_xrsp_handle_hands(struct ql_xrsp_host* host, struct ql_xrsp_topic_pkt* p
     struct hands_header* header = (struct hands_header*)pkt->payload;
     struct hands_bin* hand_l = (struct hands_bin*)(header+1);
     struct hands_bin* hand_r = (struct hands_bin*)(hand_l+1);
+
+    const uint64_t received_ns = os_monotonic_get_ns();
+    const hands_bin* hands[2] = {hand_l, hand_r};
+    bool fresh[2] = {false, false};
+    for (int i = 0; i < 2; ++i) {
+        const double sample = hands[i]->sample_timestamp;
+        if (std::isfinite(sample) && (ctrl->last_hand_received_ns[i] == 0 ||
+                                    sample != ctrl->last_hand_sample_timestamp[i])) {
+            ctrl->last_hand_sample_timestamp[i] = sample;
+            ctrl->last_hand_received_ns[i] = received_ns;
+            fresh[i] = true;
+        }
+    }
 
     ctrl->poses[0].orientation = hand_l->root_orient;
     ctrl->poses[0].position = hand_l->root_pos;
@@ -204,7 +250,11 @@ void ql_xrsp_handle_hands(struct ql_xrsp_host* host, struct ql_xrsp_topic_pkt* p
             ovr_convert(&ctrl->bones_last[idx]);
         }
     }
-    
+
+
+    for (int i = 0; i < 2; ++i) {
+        if (fresh[i]) ql_hands_record_sample(ctrl, i, hand_sample_host_ns(hands[i]->sample_timestamp, received_ns));
+    }
 
     //printf("real l: %f %f %f\n", ctrl->poses[0].position.x, ctrl->poses[0].position.y, ctrl->poses[0].position.z);
     //printf("real r: %f %f %f\n", ctrl->poses[1].position.x, ctrl->poses[1].position.y, ctrl->poses[1].position.z);

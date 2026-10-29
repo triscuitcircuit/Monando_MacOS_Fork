@@ -32,6 +32,9 @@ extern "C" {
 struct ql_hands *
 ql_hands_create(struct ql_system *sys);
 
+void
+ql_hands_record_sample(struct ql_hands *ctrl, int hand_index, int64_t sample_ns);
+
 #ifdef __cplusplus
 }
 #endif

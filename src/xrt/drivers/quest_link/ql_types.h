@@ -15,6 +15,7 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include "ql_camera_probe.h"
 
 #include "os/os_threading.h"
 #include "util/u_logging.h"
@@ -160,6 +161,32 @@ typedef struct ql_xrsp_host
     bool have_working_pkt;
     ql_xrsp_topic_pkt working_pkt;
 
+    uint64_t link_probe_packets[3]; // audio, audio control, camera
+    uint64_t link_probe_bytes[3];
+    int64_t link_probe_last_report_ns;
+    uint64_t link_probe_topic_packets[64];
+    uint64_t link_probe_topic_bytes[64];
+    uint64_t camera_probe_topic_baseline[64];
+    struct ql_camera_probe_state camera_probe;
+    void* camera_stats;
+    struct {
+        int64_t window_start_ns;
+        uint64_t reads, data_reads, large_reads, bytes;
+        int64_t usb_ns;
+        int64_t handle_ns[2];
+        int64_t handle_max_ns[2];
+        uint64_t pose_baseline;
+    } link_read;
+    int usb_read_streak;
+    int64_t usb_large_until_ns;
+
+    bool camera_stop_requested;
+    bool camera_streaming;
+    int64_t camera_last_rx_ns;
+
+    bool passthrough;
+    int64_t last_pose_target_ts;
+
     uint16_t increment;
     int pairing_state;
     int64_t start_ns;
@@ -187,6 +214,12 @@ typedef struct ql_xrsp_host
     struct os_mutex pose_mutex;
 
     bool ready_to_send_frames;
+    int64_t audio_tone_start_ns; 
+    uint64_t audio_tone_frames;  
+    bool audio_logged;  
+    int64_t audio_next_ns;   
+    int64_t audio_stats_ns;   
+    uint32_t audio_underruns, audio_trims;
     bool sent_first_frame;
     int frame_idx;
 
@@ -295,17 +328,17 @@ enum ovr_hand_joint
     OVR_HAND_JOINT_MIDDLE_PROXIMAL = 9,
     OVR_HAND_JOINT_MIDDLE_INTERMEDIATE = 10,
     OVR_HAND_JOINT_MIDDLE_DISTAL = 11,
-    
+
     // missing: OVR_HAND_JOINT_RING_METACARPAL
     OVR_HAND_JOINT_RING_PROXIMAL = 12,
     OVR_HAND_JOINT_RING_INTERMEDIATE = 13,
     OVR_HAND_JOINT_RING_DISTAL = 14,
-    
+
     OVR_HAND_JOINT_LITTLE_METACARPAL = 15,
     OVR_HAND_JOINT_LITTLE_PROXIMAL = 16,
     OVR_HAND_JOINT_LITTLE_INTERMEDIATE = 17,
     OVR_HAND_JOINT_LITTLE_DISTAL = 18,
-    
+
     OVR_HAND_JOINT_THUMB_TIP = 19,
     OVR_HAND_JOINT_INDEX_TIP = 20,
     OVR_HAND_JOINT_MIDDLE_TIP = 21,
@@ -498,6 +531,9 @@ struct ql_hands
     struct ovr_pose_f bones_last_raw[24*2];
     int16_t bone_parent_idx[24*2];
 
+    uint32_t skeleton_count;
+    uint64_t last_hand_received_ns[2];
+    double last_hand_sample_timestamp[2];
     int64_t pose_ns;
     double created_ns;
 

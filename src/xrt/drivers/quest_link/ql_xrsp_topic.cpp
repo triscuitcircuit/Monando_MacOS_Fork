@@ -16,11 +16,22 @@
 #include "ql_types.h"
 #include "ql_utils.h"
 
+static bool finish_payload(struct ql_xrsp_topic_pkt* pkt)
+{
+    if (pkt->missing_bytes != 0 || !pkt->has_alignment_padding) return true;
+    if (pkt->payload_valid == 0) return false;
+    const uint32_t padding = pkt->payload[pkt->payload_valid - 1];
+    if (padding == 0 || padding > pkt->payload_valid) return false;
+    pkt->payload_valid -= padding;
+    pkt->payload_size = pkt->payload_valid;
+    return true;
+}
+
 int32_t ql_xrsp_topic_pkt_create(struct ql_xrsp_topic_pkt* pkt, uint8_t* p_initial, int32_t initial_size, int64_t recv_ns)
 {
     *pkt = (struct ql_xrsp_topic_pkt){0};
 
-    if (initial_size < sizeof(xrsp_topic_header)) {
+    if (!p_initial || initial_size < (int32_t)sizeof(xrsp_topic_header)) {
         return -1;
     }
 
@@ -34,7 +45,7 @@ int32_t ql_xrsp_topic_pkt_create(struct ql_xrsp_topic_pkt* pkt, uint8_t* p_initi
     pkt->num_words = header->num_words;
     pkt->sequence_num = header->sequence_num;
 
-    if ((pkt->num_words == 0 && pkt->topic == 0 && pkt->sequence_num == 0)
+    if (pkt->num_words == 0
         || (pkt->topic > TOPIC_LOGGING)
         || (pkt->topic == TOPIC_AUI4A_ADV && pkt->num_words == 0xFFFF))
     {
@@ -48,22 +59,18 @@ int32_t ql_xrsp_topic_pkt_create(struct ql_xrsp_topic_pkt* pkt, uint8_t* p_initi
     }
 
     pkt->payload_size = (pkt->num_words - 1) * sizeof(uint32_t);
-    pkt->payload = (uint8_t*)malloc(pkt->payload_size);
+    pkt->payload = pkt->payload_size ? (uint8_t*)malloc(pkt->payload_size) : NULL;
+    if (pkt->payload_size && !pkt->payload) return -1;
     pkt->remainder_offs = sizeof(xrsp_topic_header) + pkt->payload_size;
 
     int32_t initial_size_no_header = initial_size - sizeof(xrsp_topic_header);
     int32_t consumed = initial_size_no_header < pkt->payload_size ? initial_size_no_header : pkt->payload_size;
-    memcpy(pkt->payload, p_initial + sizeof(xrsp_topic_header), consumed);
+    if (consumed) memcpy(pkt->payload, p_initial + sizeof(xrsp_topic_header), consumed);
     pkt->payload_valid = consumed;
-
-    // Adjust for alignment padding
-    if (pkt->has_alignment_padding && initial_size >= pkt->payload_size) {
-        pkt->payload_size -= p_initial[pkt->payload_size-1];
-    }
-
-    pkt->missing_bytes = pkt->payload_size - initial_size_no_header;
-    if (pkt->missing_bytes < 0) {
-        pkt->missing_bytes = 0;
+    pkt->missing_bytes = pkt->payload_size - consumed;
+    if (!finish_payload(pkt)) {
+        ql_xrsp_topic_pkt_destroy(pkt);
+        return -1;
     }
 
     return consumed + sizeof(xrsp_topic_header);
@@ -71,12 +78,19 @@ int32_t ql_xrsp_topic_pkt_create(struct ql_xrsp_topic_pkt* pkt, uint8_t* p_initi
 
 int32_t ql_xrsp_topic_pkt_append(struct ql_xrsp_topic_pkt* pkt, uint8_t* p_data, int32_t data_size)
 {
+    if (data_size < 0 || (data_size && !p_data)) return -1;
+    if (pkt->missing_bytes <= 0) return 0;
     int32_t consumed = pkt->missing_bytes < data_size ? pkt->missing_bytes : data_size;
     if (consumed) {
         memcpy(pkt->payload + pkt->payload_valid, p_data, consumed);
     }
     pkt->missing_bytes -= consumed;
     pkt->payload_valid += consumed;
+
+    if (!finish_payload(pkt)) {
+        ql_xrsp_topic_pkt_destroy(pkt);
+        return -1;
+    }
 
     return consumed;
 }

@@ -183,6 +183,7 @@ ql_system_get_hmd(struct ql_system *sys)
 void
 ql_system_remove_hmd(struct ql_system *sys)
 {
+	ql_xrsp_host_stop_camera(&sys->xrsp_host);
 	if (sys->xrsp_host.read_thread.initialized) {
 		os_thread_helper_stop_and_wait(&sys->xrsp_host.read_thread);
 	}

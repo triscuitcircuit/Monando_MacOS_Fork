@@ -377,6 +377,11 @@ if(XRT_BUILD_DRIVER_QUEST_LINK)
 		quest_link/ql_xrsp_hands.h
 		quest_link/ql_xrsp_logging.cpp
 		quest_link/ql_xrsp_logging.h
+		quest_link/ql_xrsp_camera.cpp
+		quest_link/ql_passthrough_pose.cpp
+		quest_link/ql_xrsp_camera.h
+		quest_link/ql_camera_stream.h
+		quest_link/ql_camera_hevc.h
 		quest_link/ql_xrsp_hostinfo.cpp
 		quest_link/ql_xrsp_hostinfo.h
 		quest_link/ql_xrsp_topic.cpp
@@ -390,6 +395,10 @@ if(XRT_BUILD_DRIVER_QUEST_LINK)
 	target_include_directories(drv_quest_link SYSTEM PRIVATE ${EIGEN3_INCLUDE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/quest_link/ ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../compositor)
 	target_include_directories(drv_quest_link PUBLIC ${LIBUSB1_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIR})
 	target_link_libraries(drv_quest_link PRIVATE ${LIBUSB1_LIBRARIES} CapnProto::capnp)
+	if(APPLE)
+		target_sources(drv_quest_link PRIVATE quest_link/ql_camera_vt.cpp quest_link/ql_camera_vt.h)
+		target_link_libraries(drv_quest_link PRIVATE "-framework VideoToolbox" "-framework CoreMedia" "-framework CoreVideo" "-framework CoreFoundation")
+	endif()
 	target_link_libraries(
 		drv_quest_link
 		PRIVATE
@@ -617,8 +626,6 @@ if(XRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE)
 endif()
 
 if(XRT_BUILD_SAMPLES)
-	# We build the sample driver to make sure it stays valid,
-	# but it never gets linked into a final target.
 	add_library(
 		drv_sample STATIC sample/sample_hmd.c sample/sample_interface.h
 				  sample/sample_prober.c

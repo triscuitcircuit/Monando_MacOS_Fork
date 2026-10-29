@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include "ql_passthrough_pose.h"
 #include <time.h>
 #include <assert.h>
 #include <inttypes.h>
@@ -139,6 +140,7 @@ ql_hmd_destroy(struct xrt_device *xdev)
 
 	// Remove this device from the system
 	ql_system_remove_hmd(hmd->sys);
+	ql_passthrough_pose_reset();
 
 	// Drop the reference to the system
 	ql_system_reference(&hmd->sys, NULL);

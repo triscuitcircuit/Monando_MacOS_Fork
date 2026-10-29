@@ -22,10 +22,39 @@
 #include "ql_xrsp.h"
 #include "ql_types.h"
 #include "ql_utils.h"
+#include "ql_passthrough_pose.h"
 
 #include <capnp/message.h>
 #include <capnp/serialize-packed.h>
 #include "protos/Pose.capnp.h"
+
+#include <atomic>
+#include "os/os_time.h"
+
+
+namespace {
+constexpr uint64_t kRecenterHoldNs = 1000ULL * 1000 * 1000;
+std::atomic<uint32_t> g_system_holds{0};
+uint64_t g_system_down_ns[2] = {};
+bool g_system_fired[2] = {};
+std::atomic<uint64_t> g_system_down_at[2] = {}; // 0 while released (read by the app)
+}
+
+extern "C" __attribute__((visibility("default"))) float
+ql_system_button_hold_progress(int index)
+{
+    if (index < 0 || index > 1) return -1;
+    const uint64_t down = g_system_down_at[index].load();
+    if (down == 0) return -1;
+    const double progress = double(os_monotonic_get_ns() - down) / double(kRecenterHoldNs);
+    return float(progress > 1 ? 1 : progress);
+}
+
+extern "C" __attribute__((visibility("default"))) uint32_t
+ql_system_button_holds(void)
+{
+    return g_system_holds.load();
+}
 
 extern "C"
 {
@@ -56,7 +85,7 @@ void ql_xrsp_handle_pose(struct ql_xrsp_segpkt* segpkt, struct ql_xrsp_host* hos
         os_mutex_unlock(&host->pose_mutex);
         return;
     }
-    
+
     OvrPoseF::Reader headsetPose = pose.getHeadset();
     int64_t hmd_pose_ns = xrsp_ts_ns_from_target(host, headsetPose.getTimestamp());
 
@@ -85,7 +114,7 @@ void ql_xrsp_handle_pose(struct ql_xrsp_segpkt* segpkt, struct ql_xrsp_host* hos
         ctrl->acc = {controllerPose.getLinAccX(), controllerPose.getLinAccY(), controllerPose.getLinAccZ()};
         ctrl->angvel = {controllerPose.getAngVelX(), controllerPose.getAngVelY(), controllerPose.getAngVelZ()};
         ctrl->angacc = {controllerPose.getAngAccX(), controllerPose.getAngAccY(), controllerPose.getAngAccZ()};
-    
+
         uint64_t ctrl_ts = controllerPose.getTimestamp();
         int64_t pose_ns = ctrl_ts ? xrsp_ts_ns_from_target(host, ctrl_ts) : hmd_pose_ns;
         ctrl->pose_ns = pose_ns;
@@ -105,6 +134,21 @@ void ql_xrsp_handle_pose(struct ql_xrsp_segpkt* segpkt, struct ql_xrsp_host* hos
         ctrl->trigger_z = controller.getTriggerZ();
         ctrl->stylus_pressure = controller.getStylusPressure();
 
+        if (idx >= 0 && idx < 2) {
+            const bool down = (ctrl->buttons & OVR_TOUCH_BTN_SYSTEM) != 0;
+            const uint64_t now = os_monotonic_get_ns();
+            if (!down) g_system_down_at[idx] = 0;
+            if (down && !(prev_buttons & OVR_TOUCH_BTN_SYSTEM)) {
+                g_system_down_ns[idx] = now;
+                g_system_down_at[idx] = now;
+                g_system_fired[idx] = false;
+            } else if (down && !g_system_fired[idx] && now - g_system_down_ns[idx] >= kRecenterHoldNs) {
+                g_system_fired[idx] = true;
+                g_system_holds++;
+                fprintf(stderr, "INFO [ql_xrsp_pose] Controller[%d] system button held 1 s: recenter\n", idx);
+            }
+        }
+
         if (first_pkt || ctrl->buttons != prev_buttons) {
             fprintf(stderr, "INFO [ql_xrsp_pose] Controller[%d] feat=0x%x btns=0x%x cap=0x%x trig=%.2f grip=%.2f stick=(%.2f, %.2f) pos=(%.2f, %.2f, %.2f)\n",
                     idx, features_raw, ctrl->buttons, ctrl->capacitance,
@@ -119,6 +163,7 @@ void ql_xrsp_handle_pose(struct ql_xrsp_segpkt* segpkt, struct ql_xrsp_host* hos
     }
 
     int64_t pose_ns = xrsp_ts_ns_from_target(host, headsetPose.getTimestamp());
+    host->last_pose_target_ts = headsetPose.getTimestamp();
     host->is_inactive = false;
 
 
@@ -143,7 +188,8 @@ void ql_xrsp_handle_pose(struct ql_xrsp_segpkt* segpkt, struct ql_xrsp_host* hos
     hmd->acc = {headsetPose.getLinAccX(), headsetPose.getLinAccY(), headsetPose.getLinAccZ()};
     hmd->angvel = {headsetPose.getAngVelX(), headsetPose.getAngVelY(), headsetPose.getAngVelZ()};
     hmd->angacc = {headsetPose.getAngAccX(), headsetPose.getAngAccY(), headsetPose.getAngAccZ()};
-    
+    ql_passthrough_pose_push(pose_ns, &hmd->pose, &hmd->vel, &hmd->angvel);
+
     // TODO: how is this even calculated??
     // Quest 2:
     // 58mm (0.057928182) angle_left -> -52deg
@@ -175,7 +221,7 @@ void ql_xrsp_handle_pose(struct ql_xrsp_segpkt* segpkt, struct ql_xrsp_host* hos
         hmd->base.hmd->distortion.fov[0].angle_left = next_angle_left;
         hmd->base.hmd->distortion.fov[1].angle_right = next_angle_right;
     }
-    
+
     os_mutex_unlock(&host->pose_mutex);
 }
 

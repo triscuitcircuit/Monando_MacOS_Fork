@@ -20,6 +20,12 @@ extern "C" {
 
 void ql_xrsp_handle_pose(struct ql_xrsp_segpkt* segpkt, struct ql_xrsp_host* host);
 
+uint32_t
+ql_system_button_holds(void);
+
+float
+ql_system_button_hold_progress(int index);
+
 #ifdef __cplusplus
 }
 #endif

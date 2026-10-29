@@ -27,6 +27,7 @@
 #include "xrt_cast.h"
 #include <atomic>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <list>
 #include <vector>
@@ -798,6 +799,23 @@ static void comp_ql_calc_frame_pacing(struct comp_target * ct,
 		                (double)present_offset_ns / 1000000.0,
 		                (double)enc_stage_ns / 1000000.0,
 		                (double)raw_enc / 1000000.0);
+		static const char * metrics_path = std::getenv("QL_METRICS_FILE");
+		if (metrics_path != nullptr && metrics_path[0] != '\0') {
+			if (std::FILE * metrics_file = std::fopen(metrics_path, "a")) {
+				std::fprintf(metrics_file,
+				             "{\"source\":\"questlink\",\"ts_ns\":%llu,\"encoded\":%llu,"
+				             "\"ooo_prevented\":%llu,\"offset_ms\":%f,\"stage_ms\":%f,"
+				             "\"raw_enc_ms\":%f,\"tx_ms\":%f}\n",
+				             (unsigned long long)os_monotonic_get_ns(),
+				             (unsigned long long)cn->encoded_frames.load(std::memory_order_relaxed),
+				             (unsigned long long)cn->out_of_order_prevented.load(std::memory_order_relaxed),
+				             (double)present_offset_ns / 1000000.0,
+				             (double)enc_stage_ns / 1000000.0,
+				             (double)raw_enc / 1000000.0,
+				             (double)raw_tx / 1000000.0);
+				std::fclose(metrics_file);
+			}
+		}
 		limit_info_spam = 0;
 
 		//add_test += (1 * U_TIME_HALF_MS_IN_NS);

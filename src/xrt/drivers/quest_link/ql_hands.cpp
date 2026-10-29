@@ -40,6 +40,7 @@
 
 #include "ql_hands.h"
 #include "ql_system.h"
+#include "ql_passthrough_pose.h"
 
 enum quest_hands_input_index
 {
@@ -50,7 +51,7 @@ enum quest_hands_input_index
     INPUT_INDICES_LAST
 };
 
-int xrt_to_ovr[XRT_HAND_JOINT_COUNT] = 
+int xrt_to_ovr[XRT_HAND_JOINT_COUNT] =
 {
     OVR_HAND_JOINT_WRIST, // OVR_HAND_JOINT_PALM
     OVR_HAND_JOINT_WRIST,
@@ -134,59 +135,34 @@ static xrt_vec3 nearest_pt_between(const xrt_vec3* p_a1, const xrt_vec3* p_a2, c
 #define HAND_ORIENT_IDX(which) (&out_tmp.values.hand_joint_set_default[which].relation.pose.orientation)
 #define HAND_ORIENT(WHICH) (&out_tmp.values.hand_joint_set_default[XRT_HAND_JOINT_##WHICH].relation.pose.orientation)
 
-
 static void
-ql_get_hand_tracking(struct xrt_device *xdev,
-                     enum xrt_input_name name,
-                     uint64_t at_timestamp_ns,
-                     struct xrt_hand_joint_set *out_value,
-                     uint64_t *out_timestamp_ns)
+compute_hand_joints(const struct ql_hands *ctrl, int hand_index, struct xrt_hand_joint_set &out_tmp)
 {
-    struct ql_hands *ctrl = (struct ql_hands *)(xdev);
-
-    if (name != XRT_INPUT_GENERIC_HAND_TRACKING_LEFT && name != XRT_INPUT_GENERIC_HAND_TRACKING_RIGHT) {
-        QUEST_LINK_ERROR("unknown input name for hand tracker");
-        return;
-    }
-
-    struct ql_xrsp_host *host = &ctrl->sys->xrsp_host;
-    os_mutex_lock(&host->pose_mutex);
-
-    struct xrt_hand_joint_set out_tmp;
-    bool hand_index = (name == XRT_INPUT_GENERIC_HAND_TRACKING_RIGHT); // 0 if left, 1 if right.
-    bool hand_valid = true;
-
-    memset(&out_tmp, 0, sizeof(out_tmp));
-    m_space_relation_ident(&out_tmp.hand_pose);
-
-
     // In hand space:
     for (int i = 0; i < XRT_HAND_JOINT_COUNT; i++) {
         int idx = xrt_to_ovr[i];
 
         out_tmp.values.hand_joint_set_default[i].relation.relation_flags = valid_flags;
-        
+
         if (i > 0) {
             *HAND_POSITION_IDX(i) = ctrl->bones_last[(hand_index*24)+idx].pos;
             *HAND_ORIENT_IDX(i) = ctrl->bones_last[(hand_index*24)+idx].orient;
         }
-        
-        out_tmp.values.hand_joint_set_default[i].radius = 0.015; // 15mm 
+
+        out_tmp.values.hand_joint_set_default[i].radius = 0.015; // 15mm
     }
 
-    // The Oculus hand spec did not have these, so we approximate them by intersecting the
-    // proximal-wrist line segment with the thumb-pinky metacarpal line segments.
-    *HAND_POSITION(INDEX_METACARPAL) = nearest_pt_between(HAND_POSITION(LITTLE_METACARPAL), 
-                                                          HAND_POSITION(THUMB_METACARPAL), 
-                                                          HAND_POSITION(WRIST), 
+    *HAND_POSITION(INDEX_METACARPAL) = nearest_pt_between(HAND_POSITION(LITTLE_METACARPAL),
+                                                          HAND_POSITION(THUMB_METACARPAL),
+                                                          HAND_POSITION(WRIST),
                                                           HAND_POSITION(INDEX_PROXIMAL));
-    *HAND_POSITION(MIDDLE_METACARPAL) = nearest_pt_between(HAND_POSITION(LITTLE_METACARPAL), 
-                                                          HAND_POSITION(THUMB_METACARPAL), 
-                                                          HAND_POSITION(WRIST), 
+    *HAND_POSITION(MIDDLE_METACARPAL) = nearest_pt_between(HAND_POSITION(LITTLE_METACARPAL),
+                                                          HAND_POSITION(THUMB_METACARPAL),
+                                                          HAND_POSITION(WRIST),
                                                           HAND_POSITION(MIDDLE_PROXIMAL));
-    *HAND_POSITION(RING_METACARPAL) = nearest_pt_between(HAND_POSITION(LITTLE_METACARPAL), 
-                                                          HAND_POSITION(THUMB_METACARPAL), 
-                                                          HAND_POSITION(WRIST), 
+    *HAND_POSITION(RING_METACARPAL) = nearest_pt_between(HAND_POSITION(LITTLE_METACARPAL),
+                                                          HAND_POSITION(THUMB_METACARPAL),
+                                                          HAND_POSITION(WRIST),
                                                           HAND_POSITION(RING_PROXIMAL));
 
     // The OpenXR spec says this is supposed to be on the middle finger bone
@@ -223,7 +199,7 @@ ql_get_hand_tracking(struct xrt_device *xdev,
                 }
             }
             math_quat_from_matrix_3x3(&mat2, &tmp2);
-            
+
             // Last adjustment, rotate the xz basis a bit.
             math_quat_from_angle_vector(90.0 * M_PI / 180, &y_vec, &tmp);
             math_quat_rotate(&tmp2, &tmp, &tmp2);
@@ -252,6 +228,43 @@ ql_get_hand_tracking(struct xrt_device *xdev,
         math_vec3_accum(&ctrl->poses[hand_index].position, HAND_POSITION_IDX(i));
         math_quat_rotate(&ctrl->poses[hand_index].orientation, HAND_ORIENT_IDX(i), HAND_ORIENT_IDX(i));
     }
+}
+
+static void
+ql_get_hand_tracking(struct xrt_device *xdev,
+                     enum xrt_input_name name,
+                     uint64_t at_timestamp_ns,
+                     struct xrt_hand_joint_set *out_value,
+                     uint64_t *out_timestamp_ns)
+{
+    struct ql_hands *ctrl = (struct ql_hands *)(xdev);
+
+    if (name != XRT_INPUT_GENERIC_HAND_TRACKING_LEFT && name != XRT_INPUT_GENERIC_HAND_TRACKING_RIGHT) {
+        QUEST_LINK_ERROR("unknown input name for hand tracker");
+        return;
+    }
+
+    struct ql_xrsp_host *host = &ctrl->sys->xrsp_host;
+    os_mutex_lock(&host->pose_mutex);
+
+    struct xrt_hand_joint_set out_tmp;
+    bool hand_index = (name == XRT_INPUT_GENERIC_HAND_TRACKING_RIGHT); // 0 if left, 1 if right.
+    const uint64_t now_ns = os_monotonic_get_ns();
+    const uint64_t received_ns = ctrl->last_hand_received_ns[hand_index];
+    const bool hand_valid = ctrl->skeleton_count >= 2 && received_ns != 0 &&
+                           now_ns >= received_ns && now_ns - received_ns < 250 * U_TIME_1MS_IN_NS;
+
+    memset(&out_tmp, 0, sizeof(out_tmp));
+    m_space_relation_ident(&out_tmp.hand_pose);
+    if (!hand_valid) {
+        out_tmp.hand_pose.relation_flags = (xrt_space_relation_flags)0;
+        *out_value = out_tmp;
+        *out_timestamp_ns = at_timestamp_ns;
+        os_mutex_unlock(&host->pose_mutex);
+        return;
+    }
+
+    compute_hand_joints(ctrl, hand_index, out_tmp);
 
     if (hand_valid) {
         out_tmp.is_active = true;
@@ -263,6 +276,23 @@ ql_get_hand_tracking(struct xrt_device *xdev,
     *out_timestamp_ns = at_timestamp_ns;
     *out_value = out_tmp;
     os_mutex_unlock(&host->pose_mutex);
+}
+
+extern "C" void
+ql_hands_record_sample(struct ql_hands *ctrl, int hand_index, int64_t sample_ns)
+{
+    if (ctrl == NULL || ctrl->skeleton_count < 2 || hand_index < 0 || hand_index > 1) return;
+    struct xrt_hand_joint_set joints;
+    memset(&joints, 0, sizeof(joints));
+    compute_hand_joints(ctrl, hand_index, joints);
+    float out[XRT_HAND_JOINT_COUNT * 7];
+    for (int i = 0; i < XRT_HAND_JOINT_COUNT; i++) {
+        const struct xrt_pose &pose = joints.values.hand_joint_set_default[i].relation.pose;
+        float *o = out + i * 7;
+        o[0] = pose.position.x; o[1] = pose.position.y; o[2] = pose.position.z;
+        o[3] = pose.orientation.x; o[4] = pose.orientation.y; o[5] = pose.orientation.z; o[6] = pose.orientation.w;
+    }
+    ql_passthrough_hand_push(hand_index, sample_ns, out);
 }
 
 static void
