@@ -36,6 +36,11 @@
 #include "ql_types.h"
 #include "ql_xrsp.h"
 #include "ql_system.h"
+#ifdef __APPLE__
+#include "ql_mirror_capture.h"
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace xrt::drivers::quest_link
 {
@@ -52,6 +57,9 @@ struct pseudo_swapchain
 		VkCommandBuffer barrier_cmd;
 		uint8_t status; // bitmask of consumer status, index 0 for acquired, the rest for each encoder
 		uint64_t frame_index;
+#ifdef __APPLE__
+		bool mirror_copy;
+#endif
         struct xrt_pose rendered_head_pose;
 		xrt::drivers::wivrn::to_headset::video_stream_data_shard::view_info_t view_info{};
 	} * images{};
@@ -106,6 +114,11 @@ struct ql_comp_target : public comp_target
 	};
 	std::list<encoder_thread> encoder_threads;
 	std::vector<std::shared_ptr<xrt::drivers::wivrn::VideoEncoder>> encoders;
+#ifdef __APPLE__
+	std::unique_ptr<MirrorCapture> mirror;
+	std::chrono::steady_clock::time_point mirrorProbe{};
+	bool mirrorAttempted = false;
+#endif
 };
 
 static void target_init_semaphores(struct ql_comp_target * cn);
@@ -126,6 +139,10 @@ static void destroy_images(struct ql_comp_target * cn)
 
 	cn->encoder_threads.clear();
 	cn->encoders.clear();
+#ifdef __APPLE__
+	cn->mirror.reset();
+	cn->mirrorAttempted = false;
+#endif
 
 	struct vk_bundle * vk = get_vk(cn);
 
@@ -483,6 +500,30 @@ static void comp_ql_create_images(struct comp_target * ct,
 	}
 }
 
+#ifdef __APPLE__
+static void ensure_mirror(struct ql_comp_target *cn) {
+	const auto now = std::chrono::steady_clock::now();
+	if (cn->mirror || cn->mirrorAttempted || now - cn->mirrorProbe < std::chrono::milliseconds(250)) return;
+	cn->mirrorProbe = now;
+	const std::string socket = mirror_socket_path();
+	if (socket.empty()) return;
+	struct stat st{};
+	if (lstat(socket.c_str(), &st) || !S_ISSOCK(st.st_mode) || st.st_uid != getuid()) return;
+	cn->mirrorAttempted = true;
+	try {
+		std::vector<VkImage> images(cn->image_count);
+		for (uint32_t i = 0; i < cn->image_count; ++i) images[i] = cn->images[i].handle;
+		cn->mirror = std::make_unique<MirrorCapture>(get_vk(cn), cn->cmd_pool, cn->format,
+		                                             cn->width, cn->height, cn->image_count,
+		                                             images.data(), cn->host->sys->hmd);
+		if (!cn->mirror->available()) { cn->mirror.reset(); U_LOG_W("VR mirror unavailable for this compositor format"); }
+	} catch (const std::exception &e) {
+		cn->mirror.reset();
+		U_LOG_W("VR mirror unavailable: %s", e.what());
+	}
+}
+#endif
+
 static bool comp_ql_has_images(struct comp_target * ct)
 {
 	return ct->images;
@@ -625,6 +666,11 @@ static void * comp_ql_present_thread(void * void_param)
 
 		cn->encoded_frames.fetch_add(1, std::memory_order_relaxed);
 
+#ifdef __APPLE__
+		if (param->thread->index == 0 && psc_image.mirror_copy && cn->mirror)
+			cn->mirror->submit(presenting_index, psc_image.frame_index);
+#endif
+
 		std::lock_guard lock(cn->psc.mutex);
 		cn->psc.images[presenting_index].status &= ~status_bit;
 	}
@@ -657,6 +703,11 @@ static VkResult comp_ql_present(struct comp_target * ct,
 
 	std::vector<VkCommandBuffer> cmdBuffers;
 	cmdBuffers.push_back(cn->psc.images[index].barrier_cmd);
+#ifdef __APPLE__
+	ensure_mirror(cn);
+	const bool mirrorCopy = cn->mirror && cn->mirror->ready();
+	if (mirrorCopy) cmdBuffers.push_back(cn->mirror->command(index));
+#endif
 
 	//if (cn->host)
 	//	cn->host->flush_stream(cn->host);
@@ -692,6 +743,9 @@ static VkResult comp_ql_present(struct comp_target * ct,
 	// set bits to 1 for index 1..num encoder threads + 1
 	cn->psc.images[index].status = (1 << (cn->encoder_threads.size() + 1)) - 2;
 	cn->psc.images[index].frame_index = cn->frame_index;
+#ifdef __APPLE__
+	cn->psc.images[index].mirror_copy = mirrorCopy;
+#endif
 
 	auto & view_info = cn->psc.images[index].view_info;
     const bool graphics_fast = !cn->c->settings.use_compute && cn->c->base.slot.one_projection_layer_fast_path;

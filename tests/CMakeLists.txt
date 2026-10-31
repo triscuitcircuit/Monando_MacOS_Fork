@@ -3,6 +3,26 @@
 # SPDX-License-Identifier: BSL-1.0
 
 # Catch2 main test driver
+add_executable(tests_ql_mirror_pixels ql_mirror_pixels_test.cpp)
+target_compile_features(tests_ql_mirror_pixels PRIVATE cxx_std_17)
+if(MSVC)
+	target_compile_options(tests_ql_mirror_pixels PRIVATE /UNDEBUG)
+else()
+	target_compile_options(tests_ql_mirror_pixels PRIVATE -UNDEBUG)
+endif()
+add_test(NAME tests_ql_mirror_pixels COMMAND tests_ql_mirror_pixels)
+
+if(APPLE AND XRT_HAVE_VULKAN AND XRT_BUILD_DRIVER_QUEST_LINK)
+	add_executable(tests_ql_mirror_gpu ql_mirror_gpu_test.cpp ../src/xrt/drivers/quest_link/ql_mirror_capture.cpp)
+	target_compile_features(tests_ql_mirror_gpu PRIVATE cxx_std_17)
+	target_compile_definitions(tests_ql_mirror_gpu PRIVATE QL_MIRROR_TESTING)
+	target_compile_options(tests_ql_mirror_gpu PRIVATE -UNDEBUG)
+	target_include_directories(tests_ql_mirror_gpu PRIVATE ${CMAKE_SOURCE_DIR}/src/xrt/auxiliary ${CMAKE_BINARY_DIR}/src/xrt/auxiliary)
+	target_link_libraries(tests_ql_mirror_gpu PRIVATE xrt-interfaces Vulkan::Vulkan)
+	add_test(NAME tests_ql_mirror_gpu COMMAND tests_ql_mirror_gpu)
+	set_tests_properties(tests_ql_mirror_gpu PROPERTIES TIMEOUT 20)
+endif()
+
 add_library(tests_main STATIC tests_main.cpp)
 target_link_libraries(tests_main PUBLIC xrt-external-catch2)
 if(ANDROID)

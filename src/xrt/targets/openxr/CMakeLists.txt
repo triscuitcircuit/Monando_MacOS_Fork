@@ -58,7 +58,7 @@ if (XRT_HAVE_APPLE)
 		APPEND_STRING
 		PROPERTY
 			LINK_FLAGS
-			"-Wl,-exported_symbol,_xrNegotiateLoaderRuntimeInterface -Wl,-exported_symbol,_ql_xrsp_sidechannel_eye_l_orient -Wl,-exported_symbol,_ql_xrsp_sidechannel_eye_r_orient -Wl,-exported_symbol,_ql_passthrough_copy_latest -Wl,-exported_symbol,_ql_passthrough_set_requested -Wl,-exported_symbol,_ql_passthrough_copy_camera -Wl,-exported_symbol,_ql_passthrough_copy_latest_ex -Wl,-exported_symbol,_ql_passthrough_head_pose_at -Wl,-exported_symbol,_ql_passthrough_head_latest -Wl,-exported_symbol,_ql_passthrough_hand_joints_at -Wl,-exported_symbol,_ql_passthrough_copy_float -Wl,-exported_symbol,_ql_system_button_holds -Wl,-exported_symbol,_ql_system_button_hold_progress -Wl,-exported_symbol,_ql_audio_submit"
+			"-Wl,-exported_symbol,_xrNegotiateLoaderRuntimeInterface -Wl,-exported_symbol,_ql_xrsp_sidechannel_eye_l_orient -Wl,-exported_symbol,_ql_xrsp_sidechannel_eye_r_orient -Wl,-exported_symbol,_ql_passthrough_copy_latest -Wl,-exported_symbol,_ql_passthrough_set_requested -Wl,-exported_symbol,_ql_passthrough_copy_camera -Wl,-exported_symbol,_ql_passthrough_copy_latest_ex -Wl,-exported_symbol,_ql_passthrough_head_pose_at -Wl,-exported_symbol,_ql_passthrough_head_latest -Wl,-exported_symbol,_ql_passthrough_hand_joints_at -Wl,-exported_symbol,_ql_passthrough_copy_float -Wl,-exported_symbol,_ql_controller_battery_percent -Wl,-exported_symbol,_ql_system_button_holds -Wl,-exported_symbol,_ql_system_button_hold_progress -Wl,-exported_symbol,_ql_audio_addon_submit -Wl,-exported_symbol,_ql_audio_submit"
 		)
 endif()
 

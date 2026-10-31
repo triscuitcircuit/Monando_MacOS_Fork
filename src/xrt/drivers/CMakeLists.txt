@@ -396,7 +396,7 @@ if(XRT_BUILD_DRIVER_QUEST_LINK)
 	target_include_directories(drv_quest_link PUBLIC ${LIBUSB1_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIR})
 	target_link_libraries(drv_quest_link PRIVATE ${LIBUSB1_LIBRARIES} CapnProto::capnp)
 	if(APPLE)
-		target_sources(drv_quest_link PRIVATE quest_link/ql_camera_vt.cpp quest_link/ql_camera_vt.h)
+		target_sources(drv_quest_link PRIVATE quest_link/ql_camera_vt.cpp quest_link/ql_camera_vt.h quest_link/ql_mirror_capture.cpp quest_link/ql_mirror_capture.h quest_link/ql_mirror_pixels.h)
 		target_link_libraries(drv_quest_link PRIVATE "-framework VideoToolbox" "-framework CoreMedia" "-framework CoreVideo" "-framework CoreFoundation")
 	endif()
 	target_link_libraries(

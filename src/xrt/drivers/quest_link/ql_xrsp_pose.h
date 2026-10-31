@@ -18,6 +18,8 @@
 extern "C" {
 #endif
 
+void ql_controller_battery_reset(void);
+
 void ql_xrsp_handle_pose(struct ql_xrsp_segpkt* segpkt, struct ql_xrsp_host* host);
 
 uint32_t

@@ -104,6 +104,7 @@ int ql_xrsp_host_create(struct ql_xrsp_host* host, uint16_t vid, uint16_t pid, i
 {
     int ret;
 
+    ql_controller_battery_reset();
     *host = (struct ql_xrsp_host){0};
     host->if_num = if_num;
     host->vid = vid;
@@ -1708,6 +1709,7 @@ constexpr uint32_t kAudioPrimeFrames = kAudioRate * 40 / 1000, kAudioMaxFrames =
 constexpr int64_t kAudioChunkNs = 10000000;
 std::mutex g_audio_mutex;
 QlAudioBuffer<kAudioRingFrames> g_audio_buffer;
+QlAudioBuffer<kAudioRingFrames> g_addon_audio_buffer;
 bool g_audio_paired = false; // protected by g_audio_mutex, together with the samples
 } // namespace
 
@@ -1716,6 +1718,13 @@ ql_audio_submit(const float *interleaved, uint32_t frames)
 {
     std::lock_guard<std::mutex> lock(g_audio_mutex);
     return g_audio_paired && g_audio_buffer.push(interleaved, frames);
+}
+
+extern "C" __attribute__((visibility("default"))) bool
+ql_audio_addon_submit(const float *interleaved, uint32_t frames)
+{
+    std::lock_guard<std::mutex> lock(g_audio_mutex);
+    return g_audio_paired && g_addon_audio_buffer.push(interleaved, frames);
 }
 
 static void xrsp_audio_drain(struct ql_xrsp_host *host)
@@ -1729,6 +1738,7 @@ static void xrsp_audio_drain(struct ql_xrsp_host *host)
             g_audio_paired = paired;
             if (!paired) {
                 g_audio_buffer.clear();
+                g_addon_audio_buffer.clear();
                 host->audio_next_ns = 0;
                 return;
             }
@@ -1737,17 +1747,25 @@ static void xrsp_audio_drain(struct ql_xrsp_host *host)
                 host->audio_next_ns = now; // retained samples belong to the new timeline
                 host->audio_trims++;
             }
+            if (g_addon_audio_buffer.size() > kAudioMaxFrames)
+                g_addon_audio_buffer.discard(g_addon_audio_buffer.size() - kAudioPrimeFrames);
             if (host->audio_next_ns == 0) { // (re)starting: wait for 40 ms in hand
-                if (g_audio_buffer.size() < kAudioPrimeFrames) return;
+                if (std::max(g_audio_buffer.size(), g_addon_audio_buffer.size()) < kAudioPrimeFrames) return;
                 host->audio_next_ns = now;
             }
             if (now < host->audio_next_ns) return;
-            if (g_audio_buffer.size() < kAudioChunk) { // ran dry
+            if (g_audio_buffer.size() < kAudioChunk && g_addon_audio_buffer.size() < kAudioChunk) { // ran dry
                 host->audio_next_ns = 0;
                 host->audio_underruns++;
                 return;
             }
-            g_audio_buffer.pop(chunk, kAudioChunk);
+            std::fill(std::begin(chunk), std::end(chunk), 0.0f);
+            if (g_audio_buffer.size() >= kAudioChunk) g_audio_buffer.pop(chunk, kAudioChunk);
+            if (g_addon_audio_buffer.size() >= kAudioChunk) {
+                float addon[kAudioChunk * 2];
+                g_addon_audio_buffer.pop(addon, kAudioChunk);
+                QlMixStereo(chunk, addon, kAudioChunk);
+            }
         }
         if (!host->audio_logged) {
             host->audio_logged = true;

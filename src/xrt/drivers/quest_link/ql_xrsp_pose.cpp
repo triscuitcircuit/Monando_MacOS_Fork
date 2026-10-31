@@ -35,9 +35,28 @@
 namespace {
 constexpr uint64_t kRecenterHoldNs = 1000ULL * 1000 * 1000;
 std::atomic<uint32_t> g_system_holds{0};
+std::atomic<uint64_t> g_controller_battery[2]{};
 uint64_t g_system_down_ns[2] = {};
 bool g_system_fired[2] = {};
 std::atomic<uint64_t> g_system_down_at[2] = {}; // 0 while released (read by the app)
+}
+
+extern "C" void
+ql_controller_battery_reset(void)
+{
+    for (auto &sample : g_controller_battery) sample.store(0, std::memory_order_relaxed);
+}
+
+extern "C" __attribute__((visibility("default"))) int
+ql_controller_battery_percent(int index)
+{
+    if (index < 0 || index > 1) return -1;
+    const uint64_t sample = g_controller_battery[index].load(std::memory_order_relaxed);
+    const uint64_t sample_ms = sample >> 8;
+    const uint64_t now_ms = os_monotonic_get_ns() / 1000000ULL;
+    const int level = int(sample & 0xff);
+    if (!sample_ms || now_ms < sample_ms || now_ms - sample_ms > 15000 || level > 100) return -1;
+    return level;
 }
 
 extern "C" __attribute__((visibility("default"))) float
@@ -125,6 +144,8 @@ void ql_xrsp_handle_pose(struct ql_xrsp_segpkt* segpkt, struct ql_xrsp_host* hos
 
         ctrl->features = features_raw & 0xFF;
         ctrl->battery = (features_raw >> 8) & 0x7F;
+        g_controller_battery[idx].store(((os_monotonic_get_ns() / 1000000ULL) << 8) | ctrl->battery,
+                                        std::memory_order_relaxed);
         ctrl->feat_2 = (features_raw >> 15);
         ctrl->buttons = controller.getButtons();
         ctrl->capacitance = controller.getCapacitance();

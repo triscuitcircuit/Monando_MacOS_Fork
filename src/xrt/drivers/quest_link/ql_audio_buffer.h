@@ -43,3 +43,8 @@ public:
         return true;
     }
 };
+
+inline void QlMixStereo(float* destination, const float* source, size_t frames) {
+    for (size_t i = 0; i < frames * 2; ++i)
+        destination[i] = std::clamp(destination[i] + source[i], -1.0f, 1.0f);
+}
